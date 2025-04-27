@@ -1,106 +1,77 @@
-# --- Import Libraries ---
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 from joblib import load
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
-
-# --- Load Dataset ---
-data = pd.read_csv("credit_risk_dataset.csv")
-X_full = data.drop(columns=["loan_status"])
-y_full = data["loan_status"]
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
 # --- Load Models ---
-st.sidebar.title("Model Selection")
-model_option = st.sidebar.selectbox("Choose Model", ["Random Forest", "Gradient Boosting", "XGBoost", "Naive Bayes"])
+@st.cache_resource
 
-if model_option == "Random Forest":
-    model = load("random_forest_model.joblib")
-elif model_option == "Gradient Boosting":
-    model = load("gradient_boosting_model.joblib")
-elif model_option == "XGBoost":
-    model = load("xgb_classifier_model.joblib")
-elif model_option == "Naive Bayes":
-    model = load("gaussian_nb_model.joblib")
+def load_models():
+    models = {
+        "Gaussian Naive Bayes": load("gaussian_nb_model.joblib"),
+        "Gradient Boosting": load("gradient_boosting_model.joblib"),
+        "XGBoost Classifier": load("xgb_classifier_model.joblib"),
+        "Random Forest": load("random_forest_model.joblib")
+    }
+    return models
 
-# --- Streamlit App Title ---
-st.title("🏦 Credit Risk Prediction Dashboard")
+models = load_models()
 
-# --- Sidebar - Select a sample from dataset ---
-st.sidebar.header("📝 Select an Applicant")
-sample_index = st.sidebar.slider("Select Sample Index", min_value=0, max_value=len(X_full)-1, value=0)
+# --- Page Title ---
+st.title("Credit Risk Prediction Dashboard")
+st.markdown("Input your information below to predict credit risk.")
+
+# --- User Input Fields ---
+st.subheader("Enter Applicant Details")
+
+person_age = st.number_input("Age", min_value=18, max_value=100, value=30)
+person_income = st.number_input("Annual Income ($)", min_value=0, value=50000)
+person_home_ownership = st.selectbox("Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"])
+person_emp_length = st.number_input("Employment Length (years)", min_value=0, value=5)
+loan_intent = st.selectbox("Loan Intent", ["EDUCATION", "MEDICAL", "VENTURE", "PERSONAL", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"])
+loan_amnt = st.number_input("Loan Amount ($)", min_value=0, value=10000)
+loan_int_rate = st.number_input("Loan Interest Rate (%)", min_value=0.0, max_value=100.0, value=12.5)
+loan_percent_income = st.number_input("Loan Percent Income", min_value=0.0, max_value=1.0, value=0.2)
+cb_person_default_on_file = st.selectbox("Previously Defaulted", ["Y", "N"])
+cb_person_cred_hist_length = st.number_input("Credit History Length (years)", min_value=0, value=5)
 
 # --- Prepare input ---
-input_data = X_full.iloc[[sample_index]]  # keep as DataFrame
+input_dict = {
+    "person_age": person_age,
+    "person_income": person_income,
+    "person_home_ownership": 0 if person_home_ownership == "RENT" else (1 if person_home_ownership == "OWN" else (2 if person_home_ownership == "MORTGAGE" else 3)),
+    "person_emp_length": person_emp_length,
+    "loan_intent": 0 if loan_intent == "EDUCATION" else (1 if loan_intent == "MEDICAL" else (2 if loan_intent == "VENTURE" else (3 if loan_intent == "PERSONAL" else (4 if loan_intent == "HOMEIMPROVEMENT" else 5)))),
+    "loan_amnt": loan_amnt,
+    "loan_int_rate": loan_int_rate,
+    "loan_percent_income": loan_percent_income,
+    "cb_person_default_on_file": 1 if cb_person_default_on_file == "Y" else 0,
+    "cb_person_cred_hist_length": cb_person_cred_hist_length
+}
 
-# --- Handle Naive Bayes differently ---
-if model_option == "Naive Bayes":
-    # Naive Bayes trained only on these features
-    naive_bayes_features = [
-        'person_age',
-        'person_income',
-        'person_emp_length',
-        'loan_amnt',
-        'loan_int_rate',
-        'loan_percent_income',
-        'cb_person_cred_hist_length'
-    ]
-    input_data = input_data[naive_bayes_features]
-    probability = model.predict_proba(input_data.values)  # Naive Bayes needs numpy array
-else:
-    probability = model.predict_proba(input_data)  # GBC, XGB, RF accept DataFrame
+input_data = np.array([list(input_dict.values())])
 
-prediction = (probability[:, 1] >= 0.5).astype(int)  # Default threshold 0.5
+# --- Model Selection ---
+selected_model = st.selectbox("Choose a model for prediction", list(models.keys()))
 
-# --- Display Prediction Result ---
-st.subheader("🔮 Prediction Result")
-if prediction[0] == 0:
-    st.success("✅ Prediction: Low Risk Applicant")
-else:
-    st.error("⚠️ Prediction: High Risk Applicant")
+if st.button("Predict"):
+    model = models[selected_model]
 
-st.write(f"Low Risk Probability: **{probability[0][0]*100:.2f}%**")
-st.write(f"High Risk Probability: **{probability[0][1]*100:.2f}%**")
+    try:
+        y_pred = model.predict(input_data)
+        if hasattr(model, "predict_proba"):
+            y_prob = model.predict_proba(input_data)[:, 1]
+        else:
+            y_prob = np.zeros_like(y_pred)
 
-# --- Real label from dataset (only for performance measurement demo) ---
-true_label = y_full.iloc[sample_index]
+        # --- Display Prediction ---
+        st.subheader("Prediction Result")
+        st.write(f"Predicted Class: {int(y_pred[0])}")
 
-# --- Metrics calculation ---
-y_test_simulated = np.array([true_label])
-y_pred_simulated = prediction
+    except Exception as e:
+        st.error(f"Error during prediction: {e}")
 
-accuracy = accuracy_score(y_test_simulated, y_pred_simulated)
-precision = precision_score(y_test_simulated, y_pred_simulated, zero_division=0)
-recall = recall_score(y_test_simulated, y_pred_simulated, zero_division=0)
-f1 = f1_score(y_test_simulated, y_pred_simulated, zero_division=0)
-roc_auc = roc_auc_score(y_test_simulated, probability[:, 1])
-
-# --- Show Model Metrics ---
-st.subheader(f"📊 {model_option} Model Performance (1 Applicant Evaluation)")
-st.table(pd.DataFrame({
-    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'ROC AUC'],
-    'Score': [f"{accuracy:.4f}", f"{precision:.4f}", f"{recall:.4f}", f"{f1:.4f}", f"{roc_auc:.4f}"]
-}))
-
-# --- Confusion Matrix ---
-st.subheader("🧩 Confusion Matrix")
-cm = confusion_matrix(y_test_simulated, y_pred_simulated)
-fig_cm, ax_cm = plt.subplots()
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=["Low Risk", "High Risk"], yticklabels=["Low Risk", "High Risk"])
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-st.pyplot(fig_cm)
-
-# --- ROC Curve ---
-st.subheader("📈 ROC Curve")
-fpr, tpr, _ = roc_curve(y_test_simulated, probability[:, 1])
-fig_roc, ax_roc = plt.subplots()
-ax_roc.plot(fpr, tpr, color='blue', label=f"AUC = {roc_auc:.2f}")
-ax_roc.plot([0, 1], [0, 1], linestyle='--', color='grey')
-ax_roc.set_xlabel("False Positive Rate")
-ax_roc.set_ylabel("True Positive Rate")
-ax_roc.set_title("Receiver Operating Characteristic (ROC)")
-ax_roc.legend()
-st.pyplot(fig_roc)
+# Footer
+st.markdown("---")
+st.caption("Developed with Streamlit 🚀")
